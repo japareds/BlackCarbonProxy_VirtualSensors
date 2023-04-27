@@ -1,0 +1,9 @@
+BC proxy
+9 features: O3,NO2,NO,N,PM1,PM2.5,PM10,T,RH
+BFS algorithm: linearSVR
+select 7 features
+BFS order: N,NO,NO2,PM1,PM10,PM25,RH,T,O3
+best model_selector: LinearSVR(C=0.1,epsilon=0.001)
+best_model_proxy: SVR(C=10,gamma=0.01,epsilon=0.2)
+
+
