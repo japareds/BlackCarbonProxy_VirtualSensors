@@ -13,7 +13,6 @@ import argparse
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from tqdm import tqdm
 import pickle
 
 from sklearn.pipeline import Pipeline
@@ -48,13 +47,17 @@ parser.add_argument('-v','--monthsVal',type=int,help='Number of months for valid
 parser.add_argument('-sc','--scaler',help='Feature scaling procedure',choices=['Standard','MinMax'],default='Standard')
 parser.add_argument('--train', help='Train a model or predict using the specified algorithm.',action='store_true')
 parser.add_argument('--bfs',help='Perform backwards feature selection using the specified algorithm',action='store_true')
+parser.add_argument('--lfs',help='Perform Lasso regression and use its weights as feature selection',action='store_true')
+parser.add_argument('--gsfs',help='Perform grid search based feature selection. Or in the other hand fit an already known model to determine the features.',action='store_true')
+parser.add_argument('--gafs',help='Perform genetic algorithm feature selection using the specified algorithm.',action='store_true')
+
 
 #filenames
 parser.add_argument('-dfn','--DataSetName',nargs='+',action='append',help='File names of files containing data.')
 parser.add_argument('-gsfn','--gridSearchFileName',type=str,help='File name of data frame containing sorted grid search results',default='GridSearchResults_BCproxy')
 parser.add_argument('-pfn','--predictionsFileName',type=str,help='File name of BC proxy model predictions picke file')
 parser.add_argument('-smfn','--scoringMetricsFileName',type=str,help='File name of BC proxy model scoring metrics report')
-parser.add_argument('-mla','--algorithm',type=str,help='ML algorithm used to fit data',default='SVR',choices=['MLR','SVR','RF','MLP','AdaBoost_SVR','AdaBoost_DT'],required=True)
+parser.add_argument('-mla','--algorithm',type=str,help='ML algorithm used to fit data',default='SVR',choices=['MLR','SVR','RF','MLP','AdaBoost_SVR','AdaBoost_DT','Lasso'],required=True)
 
 # arguments for testing a specific ML algorithm
 ## SVR
@@ -165,79 +168,6 @@ def BCProxy(df,X_train,Y_train,X_test,Y_test,cv,algorithm):
 
 
 #%%
-
-def model_fit(pipe,grid_params,X_train,Y_train,X_val,Y_val,args):
-    """
-    Grid search on training set and validating on fixed validation set
-    """
-    if args.algorithm == 'SVR':
-        results = []
-        results.append(['RMSE_train','R2_train','RMSE_val','R2_val','C','gamma','epsilon'])
-        for C in grid_params['model__C']:
-            for g in grid_params['model__gamma']:
-                for e in grid_params['model__epsilon']:
-                    pipe.named_steps['model'].C = C
-                    pipe.named_steps['model'].gamma = g
-                    pipe.named_steps['model'].epsilon = e
-                    # fit on training
-                    pipe.fit(X_train,Y_train)
-                    # traning scoring
-                    y_pred_train,RMSE_train,R2_train = BC_proxy_prediction(pipe,X_train,Y_train)
-                    # validation scoring
-                    y_pred_val,RMSE_val,R2_val = BC_proxy_prediction(pipe,X_val,Y_val)
-                    
-                    # save results
-                    results.append([RMSE_train,R2_train,RMSE_val,R2_val,C,g,e])
-    
-    elif args.algorithm == 'RF':
-        results = []
-        results.append(['RMSE_train','R2_train','RMSE_val','R2_val','n_estimators','max_features','max_depth','min_samples_split','max_samples'])
-        
-        for n_estimators in grid_params['model__n_estimators']:
-            for max_features in grid_params['model__max_features']:
-                for max_depth in grid_params['model__max_depth']:
-                    for min_samples_split in grid_params['model__min_samples_split']:
-                        for max_samples in grid_params['model__max_samples']:
-                            pipe.named_steps['model'].n_estimators = n_estimators
-                            pipe.named_steps['model'].max_features = max_features
-                            pipe.named_steps['model'].max_depth = max_depth
-                            pipe.named_steps['model'].min_samples_split = min_samples_split
-                            pipe.named_steps['model'].max_samples = max_samples
-
-                            # fit on training
-                            pipe.fit(X_train,Y_train)
-                            # traning scoring
-                            y_pred_train,RMSE_train,R2_train = BC_proxy_prediction(pipe,X_train,Y_train)
-                            # validation scoring
-                            y_pred_val,RMSE_val,R2_val = BC_proxy_prediction(pipe,X_val,Y_val)
-                            
-                            # save results
-                            results.append([RMSE_train,R2_train,RMSE_val,R2_val,n_estimators,max_features,max_depth,min_samples_split,max_samples])
-                            
-    elif args.algorithm == 'MLP':
-        results = []
-        results.append(['RMSE_train','R2_train','RMSE_val','R2_val','lr_init','hidden_layer_sizes','alpha'])    
-            
-        for lr in grid_params['model__learning_rate_init']:
-            for hls in grid_params['model__hidden_layer_sizes']:
-                for alpha in grid_params['model__alpha']:
-                    pipe.named_steps['model'].learning_rate_init = lr
-                    pipe.named_steps['model'].hidden_layer_sizes = hls
-                    pipe.named_steps['model'].alpha = alpha
-
-                    # fit on training
-                    pipe.fit(X_train,Y_train)
-                    # traning scoring
-                    y_pred_train,RMSE_train,R2_train = BC_proxy_prediction(pipe,X_train,Y_train)
-                    # validation scoring
-                    y_pred_val,RMSE_val,R2_val = BC_proxy_prediction(pipe,X_val,Y_val)
-                            
-                    # save results
-                    results.append([RMSE_train,R2_train,RMSE_val,R2_val,lr,hls,alpha])
-
-
-                        
-        return results
     
 
 # #%% Create a specific ML model
@@ -438,7 +368,7 @@ def main(df,args,results_path):
 
     if args.train:
         print(f'Training ML model: {args.algorithm}')
-        # grid search
+        # Feature selection
         if args.bfs:
             print('Performing BFS')
             gs,gs_results = MLM.BFS(X_train,Y_train,cv,args.algorithm)
@@ -447,11 +377,36 @@ def main(df,args,results_path):
             fname =f'BFS_{X_train.shape[1]}features_{args.algorithm}.pkl'
             with open(results_path+fname, 'wb') as handle:
                 pickle.dump(gs, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        elif args.lfs:
+            print('Lasso feature selection')
+            if args.gsfs:
+                gs,gs_results = MLM.LassoFeatureSelection(X_train,Y_train,cv,gridsearch=args.gsfs)
+                fname = f'LFS_{X_train.shape[1]}features_results.csv'
+                gs_results.to_csv(results_path+fname,sep=',')
+                fname = f'LFS_{X_train.shape[1]}features.pkl'
+                with open(results_path+fname, 'wb') as handle:
+                    pickle.dump(gs, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            else:
+                model = MLM.LassoFeatureSelection(X_train,Y_train,cv,gridsearch=args.gsfs)
+                fname = f'LFS_{X_train.shape[1]}features_model.pkl'
+                with open(results_path+fname, 'wb') as handle:
+                    pickle.dump(model, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            
+        elif args.gafs:
+            print('Genetic algorithm feature selection')
+            ga,ga_results = MLM.GAFS(X_train,Y_train,cv)
+            fname = f'GAFS_{X_train.shape[1]}features_{args.algorithm}_results.csv'
+            ga_results.to_csv(results_path+fname,sep=',')
+            fname = f'GAFS_{X_train.shape[1]}features_{args.algorithm}.pkl'
+            with open(results_path+fname, 'wb') as handle:
+                pickle.dump(ga, handle, protocol=pickle.HIGHEST_PROTOCOL)
             
         else:
+            # no feature selection
             gs, gs_results = BCProxy(df,X_train,Y_train,X_test,Y_test,cv,algorithm=args.algorithm)
         
-        return gs, gs_results
+      
     
     
     else:

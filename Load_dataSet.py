@@ -13,7 +13,6 @@ import warnings
 import pickle
 from pandas.tseries.offsets import DateOffset
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from tqdm import tqdm
 #%%
 class dataSet_raw_refStation():
     def __init__(self,path,fname,time_agg):

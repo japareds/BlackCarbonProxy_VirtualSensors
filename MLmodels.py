@@ -11,12 +11,14 @@ import pandas as pd
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import cross_val_score, cross_validate,learning_curve, validation_curve,GridSearchCV, RandomizedSearchCV
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, Lasso
 from sklearn.feature_selection import RFECV,RFE
 from sklearn import svm, tree
 from sklearn.ensemble import RandomForestRegressor, AdaBoostRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.metrics import mean_squared_error, r2_score
+from sklearn_genetic import GAFeatureSelectionCV, ExponentialAdapter, InverseAdapter, ConstantAdapter
+from sklearn_genetic.callbacks import ProgressBar, DeltaThreshold
 
 #%%
 def get_algorithm_params(algorithm,X_train,feature_selection):
@@ -105,6 +107,124 @@ def BFS(X_train,Y_train,cv,algorithm):
     print([x for _, x in sorted(zip(gs.best_estimator_['selector'].ranking_, X_train.columns))])
     
     return gs,gs_results
+
+def LassoFeatureSelection(X_train,Y_train,cv,gridsearch=True):
+    
+    if gridsearch:
+        print('Grid search Lasso feature selection')
+        model = Lasso(fit_intercept=True,max_iter=2000,tol=1e-4,positive=False,random_state=92)
+        scaler = StandardScaler()
+        
+        pipe = Pipeline([('scaler',scaler),('model',model)])
+        
+        grid_params = {
+            'model__alpha':[0.1,1,5,10,20,50],
+            'model__selection':['cyclic','random']
+            }
+    
+        gs = GridSearchCV(pipe,grid_params,
+                          scoring='neg_root_mean_squared_error',
+                          refit=True,
+                          cv=cv,
+                          verbose=1,
+                          pre_dispatch=4,
+                          return_train_score=True
+                          )
+    
+        start_time = time.time()
+        gs.fit(X_train,Y_train.values.ravel())
+        end_time = time.time()
+        gs_results = pd.DataFrame(gs.cv_results_)
+        gs_results = gs_results.sort_values(by='rank_test_score')
+        print('Grid search finished in %.2f'%(end_time-start_time))
+        print(f'Best hyperparameters {gs.best_params_}')
+        print(f'Features: {gs.best_estimator_.feature_names_in_}\nWeights: {gs.best_estimator_[-1].coef_}')
+        print('Features importance in decreasing order (the first feature is the most important)')
+        
+        return gs,gs_results
+        
+    
+    else:
+        print('Lasso feature selection\nSpecific model fitted in the whole training set.')
+        # specific hyperparameters for the model
+        model = Lasso(alpha=0.1,selection='cyclic',fit_intercept=True,max_iter=2000,tol=1e-4,positive=False,random_state=92)
+        scaler = StandardScaler()
+        
+        pipe = Pipeline([('scaler',scaler),('model',model)])
+        pipe.fit(X_train,Y_train)
+        weights = pipe.named_steps['model'].coef_
+        features = [i for i in X_train.columns]
+        print('Features: Weights')
+        for f,w in zip(features,weights):
+            print(f'{f}: {w}')
+        
+        return pipe
+        
+        
+    
+def GAFS(X_train,Y_train,cv):
+    """
+    Genetic algorithm feature selection
+    """
+    p = X_train.shape[1]
+    N = X_train.shape[1]
+    # regressor
+    scaler = StandardScaler()
+    model = svm.SVR(kernel='rbf',C=10,gamma=0.01,epsilon=0.2)
+    scaler = StandardScaler()
+    
+    pipe = Pipeline([('scaler',scaler),('model',model)])
+    print(f'Feature selection regressor: {pipe}')
+    
+    # genetic algorithm
+    crossover_scheduler = InverseAdapter(0.8, 0.2, 0.01)
+    mutation_scheduler = ConstantAdapter(1/p, 1/p, 0.01)
+    
+    threshold_callback = DeltaThreshold(threshold=1e-4,generations=10,metric='fitness_max')
+    bar_callback = ProgressBar()
+    callbacks = [threshold_callback,bar_callback]
+    
+    ga = GAFeatureSelectionCV(
+        estimator=pipe,
+        cv=cv,
+        scoring='neg_root_mean_squared_error',
+        population_size=50,
+        generations=100,
+        tournament_size=3,
+        elitism=True,
+        crossover_probability=crossover_scheduler,
+        mutation_probability=mutation_scheduler,
+        max_features=7,
+        verbose=True,
+        keep_top_k=5,
+        criteria='max',
+        algorithm='eaMuPlusLambda',
+        refit=True,
+        n_jobs=4,
+        pre_dispatch=8,
+        return_train_score=True,
+        error_score=np.nan
+        )
+    
+    
+    start_time = time.time()
+    ga.fit(X_train,Y_train.values.ravel(),callbacks=callbacks)
+    end_time = time.time()
+    print('Search finished in %.2f'%(end_time-start_time))
+    
+    ga_results = pd.DataFrame(ga.cv_results_)
+    ga_results = ga_results.sort_values(by='rank_test_score')
+    print('Feature selection\n')
+    for f,s in zip(X_train.columns,ga.support_):
+        print(f'{f}: {s}')
+        
+    
+    
+    
+    return ga,ga_results
+    
+    
+    
 
 
 #%%
